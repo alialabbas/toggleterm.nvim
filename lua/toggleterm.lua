@@ -58,8 +58,8 @@ end
 ---@param name string?
 local function smart_toggle(size, dir, direction, name)
   local has_open, windows = ui.find_open_windows()
-  if not has_open then
-    if not ui.open_terminal_view(size, direction) then
+  if not has_open or direction == "tab" then
+    if direction == "tab" or not ui.open_terminal_view(size, direction) then
       local term_id = terms.get_toggled_id()
       terms.get_or_create_term(term_id, dir, direction, name):open(size, direction)
     end
@@ -124,15 +124,15 @@ local function on_term_open()
   if not term then
     local buf = api.nvim_get_current_buf()
     terms.Terminal
-      :new({
-        id = id,
-        bufnr = buf,
-        window = api.nvim_get_current_win(),
-        highlights = config.highlights,
-        job_id = vim.b[buf].terminal_job_id,
-        direction = ui.guess_direction(),
-      })
-      :__resurrect()
+        :new({
+          id = id,
+          bufnr = buf,
+          window = api.nvim_get_current_win(),
+          highlights = config.highlights,
+          job_id = vim.b[buf].terminal_job_id,
+          direction = ui.guess_direction(),
+        })
+        :__resurrect()
   end
   ui.set_winbar(term)
 end
@@ -317,6 +317,14 @@ function M.toggle_all(force)
   end
 end
 
+-- TODO: Should probably be implemented inside my config and not the plugin
+function M.close_all()
+  local terminals = terms.get_all()
+  for _, term in pairs(terminals) do
+    term:close()
+  end
+end
+
 ---@param _ ToggleTermConfig
 local function setup_autocommands(_)
   api.nvim_create_augroup(AUGROUP, { clear = true })
@@ -357,6 +365,21 @@ local function setup_autocommands(_)
     group = AUGROUP,
     pattern = "term://*",
     callback = apply_colors,
+  })
+
+  api.nvim_create_autocmd("TabClosed", {
+    group = AUGROUP,
+    callback = function(args)
+      local tabid = tonumber(args.file)
+      terms.close_tab(tabid)
+    end,
+  })
+
+  api.nvim_create_autocmd("TabNew", {
+    group = AUGROUP,
+    callback = function()
+      terms.create_tab()
+    end,
   })
 end
 
@@ -461,6 +484,10 @@ end
 
 function M.setup(user_prefs)
   local conf = config.set(user_prefs)
+  for _, v in pairs(vim.api.nvim_list_tabpages()) do
+    terms.create_tab(v)
+  end
+
   setup_global_mappings()
   setup_autocommands(conf)
   setup_commands()

@@ -37,12 +37,14 @@ local function get_newline_chr()
   return is_windows and (is_pwsh(shell) and "\r" or "\r\n") or "\n"
 end
 
----@alias Mode "n" | "i" | "?"
+local function get_current_tab()
+  return vim.api.nvim_tabpage_get_number(vim.api.nvim_get_current_tabpage()) ---@alias Mode "n" | "i" | "?"
+end
 
 --- @class TerminalState
 --- @field mode Mode
 
----@type Terminal[]
+---@type Terminal[][]
 local terminals = {}
 
 --- @class TermCreateArgs
@@ -50,6 +52,7 @@ local terminals = {}
 --- @field cmd? string a custom command to run
 --- @field direction? string the layout style for the terminal
 --- @field id number?
+--- @field tabno number?
 --- @field highlights table<string, table<string, string>>?
 --- @field dir string? the directory for the terminal
 --- @field count number? the count that triggers that specific terminal
@@ -101,7 +104,9 @@ local Terminal = {}
 local function next_id()
   local all = M.get_all(true)
   for index, term in pairs(all) do
-    if index ~= term.id then return index end
+    if index ~= term.id then
+      return index
+    end
   end
   return #all + 1
 end
@@ -118,8 +123,10 @@ end
 ---Return currently focused terminal id.
 ---@return number?
 function M.get_focused_id()
-  for _, term in pairs(terminals) do
-    if term:is_focused() then return term.id end
+  for _, tab in pairs(terminals) do
+    for _, term in pairs(tab) do
+      if term:is_focused() then return term.id end
+    end
   end
   return nil
 end
@@ -147,7 +154,8 @@ end
 --- Remove the in memory reference to the no longer open terminal
 --- @param num number
 local function delete(num)
-  if terminals[num] then terminals[num] = nil end
+  local tabno = get_current_tab()
+  if terminals[tabno][num] then terminals[tabno][num] = nil end
 end
 
 ---Terminal buffer autocommands
@@ -192,7 +200,8 @@ function Terminal:new(term)
   --- If we try to create a new terminal, but the id is already
   --- taken, return the terminal with the containing id
   local id = term.count or term.id
-  if id and terminals[id] then return terminals[id] end
+  term.tabno = term.tabno or get_current_tab()
+  if id and terminals[term.tabno][id] then return terminals[term.tabno][id] end
   local conf = config.get()
   self.__index = self
   term.newline_chr = term.newline_chr or get_newline_chr()
@@ -220,8 +229,14 @@ end
 ---@package
 ---Add a terminal to the list of terminals
 function Terminal:__add()
-  if terminals[self.id] and terminals[self.id] ~= self then self.id = next_id() end
-  if not terminals[self.id] then terminals[self.id] = self end
+  local tabno = get_current_tab()
+  if not terminals[tabno] then
+    terminals[tabno] = {}
+  end
+  local tabterms = terminals[tabno]
+  if tabterms[self.id] and tabterms[self.id] ~= self then self.id = next_id() end
+  if not tabterms[self.id] then tabterms[self.id] = self end
+
   return self
 end
 
@@ -229,7 +244,7 @@ function Terminal:is_float() return self.direction == "float" and ui.is_float(se
 
 function Terminal:is_split()
   return (self.direction == "vertical" or self.direction == "horizontal")
-    and not ui.is_float(self.window)
+      and not ui.is_float(self.window)
 end
 
 function Terminal:is_tab() return self.direction == "tab" and not ui.is_float(self.window) end
@@ -264,7 +279,7 @@ end
 function Terminal:persist_mode()
   local raw_mode = api.nvim_get_mode().mode
   local m = "?"
-  if raw_mode:match("nt") then -- nt is normal mode in the terminal
+  if raw_mode:match("nt") then    -- nt is normal mode in the terminal
     m = mode.NORMAL
   elseif raw_mode:match("t") then -- t is insert mode in the terminal
     m = mode.INSERT
@@ -316,7 +331,7 @@ end
 ---@param go_back boolean? whether or not to return to original window
 function Terminal:send(cmd, go_back)
   cmd = type(cmd) == "table" and with_cr(self.newline_chr, unpack(cmd))
-    or with_cr(self.newline_chr, cmd --[[@as string]])
+      or with_cr(self.newline_chr, cmd --[[@as string]])
   fn.chansend(self.job_id, cmd)
   self:scroll_bottom()
   if go_back and self:is_focused() then
@@ -502,7 +517,7 @@ end
 ---@param size number?
 ---@param direction string?
 function Terminal:toggle(size, direction)
-  if self:is_open() then
+  if self:is_open() and direction ~= "tab" then
     self:close()
   else
     self:open(size, direction)
@@ -521,7 +536,8 @@ function M.identify(name)
   local comment_sep = get_comment_sep()
   local parts = vim.split(name, comment_sep)
   local id = tonumber(parts[#parts])
-  return id, terminals[id]
+  local tabno = get_current_tab()
+  return id, terminals[tabno][id]
 end
 
 ---get existing terminal or create an empty term table
@@ -532,10 +548,22 @@ end
 ---@return Terminal
 ---@return boolean
 function M.get_or_create_term(num, dir, direction, name)
-  local term = M.get(num)
-  if term then return term, false end
+  if direction ~= "tab" then
+    local term = M.get(num)
+    if term then
+      return term, false
+    end
+  end
   if dir and fn.isdirectory(fn.expand(dir)) == 0 then dir = nil end
-  return Terminal:new({ id = num, dir = dir, direction = direction, display_name = name }), true
+
+  -- tab is not created yet so we will have to manually create the entry
+  local tabno = get_current_tab()
+  if direction == "tab" then
+    tabno = tabno + 1
+    terminals[tabno] = {}
+  end
+
+  return Terminal:new({ id = num, dir = dir, direction = direction, display_name = name, tabno = tabno }), true
 end
 
 ---Get a single terminal by id, unless it is hidden
@@ -543,7 +571,17 @@ end
 ---@param include_hidden boolean? whether or nor to filter out hidden
 ---@return Terminal?
 function M.get(id, include_hidden)
-  local term = terminals[id]
+  local tabno = get_current_tab()
+  local tabterm = terminals[tabno]
+  local term
+
+  if tabterm then
+    term = tabterm[id]
+  else
+    term = nil
+    terminals[tabno] = {}
+  end
+
   return (term and (include_hidden == true or not term.hidden)) and term or nil
 end
 
@@ -566,11 +604,37 @@ end
 ---@return Terminal[]
 function M.get_all(include_hidden)
   local result = {}
-  for _, v in pairs(terminals) do
+  local tabno = get_current_tab()
+
+  if not terminals[tabno] then return result end
+
+  for _, v in pairs(terminals[tabno]) do
     if include_hidden or (not include_hidden and not v.hidden) then table.insert(result, v) end
   end
   table.sort(result, function(a, b) return a.id < b.id end)
   return result
+end
+
+function M.close_tab(tabno)
+  local tabno = tabno or get_current_tab()
+  for _, t in pairs(terminals[tabno]) do
+    t:shutdown()
+  end
+
+  terminals[tabno] = {}
+
+  -- Vim/Neovim tabs are sequentials
+  -- We need to move all tabs higher than the closed tab by one
+  for i = tabno + 1, #terminals do
+    terminals[i - 1] = terminals[i]
+  end
+
+  terminals[#terminals] = {}
+end
+
+function M.create_tab(tabno)
+  local tabno = tabno or get_current_tab()
+  terminals[tabno] = {}
 end
 
 if _G.IS_TEST then

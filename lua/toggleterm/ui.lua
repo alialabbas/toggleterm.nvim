@@ -83,11 +83,11 @@ function M.winbar(id)
   for _, t in pairs(terms) do
     local h = id == t.id and "WinBarActive" or "WinBarInactive"
     str = str
-      .. fmt("%%%d@v:lua.___toggleterm_winbar_click@", t.id)
-      .. hl(h)
-      .. config.winbar.name_formatter(t)
-      .. hl_end
-      .. " "
+        .. fmt("%%%d@v:lua.___toggleterm_winbar_click@", t.id)
+        .. hl(h)
+        .. config.winbar.name_formatter(t)
+        .. hl_end
+        .. " "
   end
   return str
 end
@@ -95,12 +95,12 @@ end
 ---@param term Terminal?
 function M.set_winbar(term)
   if
-    not config.winbar.enabled
-    or not term
-    or term:is_float() -- TODO: make this configurable
-    or fn.exists("+winbar") ~= 1
-    or not term.window
-    or not api.nvim_win_is_valid(term.window)
+      not config.winbar.enabled
+      or not term
+      or term:is_float() -- TODO: make this configurable
+      or fn.exists("+winbar") ~= 1
+      or not term.window
+      or not api.nvim_win_is_valid(term.window)
   then
     return
   end
@@ -114,7 +114,7 @@ end
 function M.hl_term(term)
   local hls = (term and term.highlights and not vim.tbl_isempty(term.highlights))
       and term.highlights
-    or config.highlights
+      or config.highlights
 
   if not hls or vim.tbl_isempty(hls) then return end
 
@@ -201,13 +201,11 @@ end
 function M.find_open_windows(comparator)
   comparator = comparator or default_compare
   local term_wins, is_open = {}, false
-  for _, tab in ipairs(api.nvim_list_tabpages()) do
-    for _, win in pairs(api.nvim_tabpage_list_wins(tab)) do
-      local buf = api.nvim_win_get_buf(win)
-      if comparator(buf) then
-        is_open = true
-        table.insert(term_wins, { window = win, term_id = vim.b[buf].toggle_number })
-      end
+  for _, win in pairs(api.nvim_tabpage_list_wins(0)) do
+    local buf = api.nvim_win_get_buf(win)
+    if comparator(buf) then
+      is_open = true
+      table.insert(term_wins, { window = win, term_id = vim.b[buf].toggle_number })
     end
   end
   return is_open, term_wins
